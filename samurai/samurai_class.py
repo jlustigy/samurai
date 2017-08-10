@@ -16,9 +16,10 @@ import emcee3
 import h5py
 
 # Import packages files
-import geometry
-import prior
-import reparameterize
+sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
+from . import geometry
+from . import prior
+from . import reparameterize
 from .likelihood import lnprob, lnlike, lnprior
 from .map_utils import generate_tex_names, save2hdf5, calculate_walkers, set_nreg
 from .mcmc_physical import plot_area_alb, plot_model_data, plot_posteriors
