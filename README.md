@@ -1,2 +1,2 @@
-# samurai
+# Exoplanet `samurai`
 Surface Albedo Mapping Using RotAtional Inversion
