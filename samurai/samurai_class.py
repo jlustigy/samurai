@@ -20,7 +20,7 @@ sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
 from . import geometry
 from . import prior
 from . import reparameterize
-from .likelihood import lnprob, lnlike, lnprior
+from .likelihood import lnprob, lnlike, lnprior, lnprob_atmosphere
 from .map_utils import generate_tex_names, save2hdf5, calculate_walkers, set_nreg
 from .mcmc_physical import plot_area_alb, plot_model_data, plot_posteriors
 from .mcmc_analysis import plot_trace
@@ -472,52 +472,58 @@ class Data(object):
 
 class Mapper(object):
     """
-    An interface to the Surface Albedo Mapping Using RotAtional Inversion (``samurai``) model.
+    A mapping object and interface to the Surface Albedo Mapping Using RotAtional
+    Inversion (``samurai``) model.
 
-    Attributes
+    Parameters
     ----------
-
+    fmodel : str
+        Forward model ("map" or "lightcurve")
+    imodel : str
+        Inverse model ("emcee" or "emcee3")
+    data : samurai.Data
+        Data object
+    ntype : int
+        Number of surface types
+    nsideseed : int
+        ``nside = 2 * 2 ** nsideseed``
+    regularization : str
+        Type of regularization term1
+    reg_area : bool
+    reg_alnd : bool
+    sigmay : float
+    noiselevel : float
+    Nmcmc : int
+        Number of MCMC iterations
+    Nmcmc_b : int
+        Number of MCMC burn-in iterations
+    mcmc_seedamp : float
+        Amplitude of gaussian ball for starting state
+    hdf5_compression : str
+        Compression algorithm for HDF5 datasets
+    nslice : int
+        Number of longitudinal slices in map ``fmodel``
+    ncpu : int
+        Number of CPUs to use for multithreading MCMC
+    output : samurai.Output
+        Object containing location and opened HDF5 file
+    use_grey : bool
+        Include a grey (spectrally uniform) contribution in the model
+        (but not spatially uniform)
+    use_global : bool
+        Include a global (spatially uniform) contribution  in the model
+        (but not spectrally uniform)
+    max_dev : float
+        Maximum deviation from flat line allowed for grey albedo spectrum and
+        homogenous global coverage
     """
     def __init__(self, fmodel="map", imodel="emcee", data=None,
                  ntype=3, nsideseed=4, regularization=None, reg_area=False, reg_albd=False,
                  sigmay=3.0, noiselevel=0.01, Nmcmc=10000, Nmcmc_b=0, mcmc_seedamp=0.5,
-                 hdf5_compression='lzf', nslice=9, ncpu=None, output=None
+                 hdf5_compression='lzf', nslice=9, ncpu=None, output=None,
+                 use_grey = False, use_global = False, max_dev = 0.05
                  ):
         """
-        Samurai mapping object
-
-        Parameters
-        ----------
-        fmodel : str
-            Forward model ("map" or "lightcurve")
-        imodel : str
-            Inverse model ("emcee" or "emcee3")
-        data : samurai.Data
-            Data object
-        ntype : int
-            Number of surface types
-        nsideseed : int
-            ``nside = 2 * 2 ** nsideseed``
-        regularization : str
-            Type of regularization term1
-        reg_area : bool
-        reg_alnd : bool
-        sigmay : float
-        noiselevel : float
-        Nmcmc : int
-            Number of MCMC iterations
-        Nmcmc_b : int
-            Number of MCMC burn-in iterations
-        mcmc_seedamp : float
-            Amplitude of gaussian ball for starting state
-        hdf5_compression : str
-            Compression algorithm for HDF5 datasets
-        nslice : int
-            Number of longitudinal slices in map ``fmodel``
-        ncpu : int
-            Number of CPUs to use for multithreading MCMC
-        output : samurai.Output
-            Object containing location and opened HDF5 file
         """
         self.fmodel=fmodel
         self.imodel=imodel
@@ -537,6 +543,9 @@ class Mapper(object):
         if self.ncpu is None:
             self.ncpu = multiprocessing.cpu_count()
         self.output=output
+        self.use_grey = use_grey
+        self.use_global = use_global
+        self.max_dev = max_dev
 
         # Params unique to map model
         self.nslice=nslice
@@ -680,6 +689,8 @@ class Mapper(object):
         hdf5_compression = self.hdf5_compression
         waveband_centers = self.data.wlc_i
         waveband_widths = self.data.wlw_i
+        use_grey = self.use_grey
+        use_global = self.use_global
 
         # Input data
         Obs_ij = self.data.Obs_ij
@@ -806,6 +817,316 @@ class Mapper(object):
             # more information about the best-fit parameters
             data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice)
             lnprob_bestfit = lnprob( output['x'], *data )
+
+            # compute BIC
+            BIC = 2.0 * lnprob_bestfit + len( output['x'] ) * np.log( len(Obs_ij.flatten()) )
+            if verbose: print('BIC: ', BIC)
+
+            # best-fit values for physical parameters
+            if nregparam > 0:
+                X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(output["x"][:-1*nregparam], ntype, nband, nslice)
+            else :
+                X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(output["x"], ntype, nband, nslice)
+
+            X_albd_kj_T = X_albd_kj.T
+
+            # best-fit values for regularizing parameters
+            if regularization is not None:
+                if regularization == 'Tikhonov' :
+                    if verbose: print('sigma', best_fit[-1])
+                elif regularization == 'GP' :
+                    if verbose: print('overall_amp', best_fit[-3])
+                    if verbose: print('wn_rel_amp', np.exp( best_fit[-2] ) / ( 1. + np.exp( best_fit[-2] ) ))
+                    if verbose: print('lambda _angular', best_fit[-1] * ( 180. / np.pi ))
+                elif regularization == 'GP2' :
+                    if verbose: print('overall_amp', best_fit[-2])
+                    if verbose: print('lambda _angular', best_fit[-1]* ( 180. / np.pi ))
+
+            # Flatten best-fitting physical parameters
+            bestfit = np.r_[ X_albd_kj.flatten(), X_area_lk.T.flatten() ]
+
+            # Create dictionaries of initial results to convert to hdf5
+            # datasets and attributes
+            init_dict_datasets = {
+                "X0_albd_kj" : X0_albd_kj,
+                "X0_area_lk" : X0_area_lk,
+                "best_fity" : best_fit,
+                "X_area_lk" : X_area_lk,
+                "X_albd_kj_T" : X_albd_kj_T,
+                "best_fitx" : bestfit
+            }
+            init_dict_attrs = {
+                "best_lnprob" : lnprob_bestfit,
+                "best_BIC" : BIC
+            }
+
+            grp_index = grp_init.create_group(str(i))
+
+            # Save initial run datasets
+            for key, value in init_dict_datasets.iteritems():
+                if value is None:
+                    grp_index.create_dataset(key, data=(), compression=compression)
+                else:
+                    grp_index.create_dataset(key, data=value, compression=compression)
+            # Save initial run metadata
+            for key, value in init_dict_attrs.iteritems():
+                if value is None:
+                    grp_index.attrs[key] = ()
+                else:
+                    grp_index.attrs[key] = value
+
+        # Close hdf5 file stream
+        f.close()
+
+        # Save path to HDF5 file in output object
+        self.output = Output(hpath=hfile)
+
+    def run_oe_atmosphere(self, savedir="mcmc_output", tag=None, verbose=False, N=1):
+        """
+        Run Mapper object simulation using Optimal Estimation (OE)
+
+        Parameters
+        ----------
+        """
+
+        # Get start time
+        now = datetime.datetime.now()
+        if verbose: print(now.strftime("%Y-%m-%d %H:%M:%S"))
+
+        # Create directory for this run
+        if tag is None:
+            startstr = now.strftime("%Y-%m-%d--%H-%M")
+        else:
+            startstr = tag
+
+        # Create savedir directory, if necessary
+        if savedir is not None:
+            run_dir = os.path.join(savedir, startstr)
+            try:
+                os.mkdir(savedir)
+                if verbose: print("Created directory:", savedir)
+            except OSError:
+                if verbose: print(savedir, "already exists.")
+        else:
+            run_dir = os.path.join("", startstr)
+        # Create unique run_dir directory
+        os.mkdir(run_dir)
+        if verbose: print("Created directory:", run_dir)
+
+        # Unpack class variables
+        fmodel = self.fmodel
+        imodel = self.imodel
+        Time_i = self.data.Time_i
+        ntype = self.ntype
+        nregparam = self.nregparam
+        regularization = self.regularization
+        lat_o = self.data.lat_o
+        lon_o = self.data.lon_o
+        lat_s = self.data.lat_s
+        lon_s = self.data.lon_s
+        omega = self.data.omega
+        ncpu = self.ncpu
+        num_mcmc = self.Nmcmc
+        seed_amp  = self.mcmc_seedamp
+        hdf5_compression = self.hdf5_compression
+        waveband_centers = self.data.wlc_i
+        waveband_widths = self.data.wlw_i
+        use_grey = self.use_grey
+        use_global = self.use_global
+        max_dev = self.max_dev
+
+        # Input data
+        Obs_ij = self.data.Obs_ij
+        if self.data.Obsnoise_ij is None:
+            Obsnoise_ij = ( self.noiselevel * self.data.Obs_ij )
+        else:
+            Obsnoise_ij = self.data.Obsnoise_ij
+
+        nband = len(Obs_ij[0])
+
+        # Calculate n_side
+        nside = 2*2**self.nsideseed
+
+        # Set geometric kernel depending on model
+        if fmodel == "map":
+            nslice = self.nslice
+            param_geometry = ( lat_o, lon_o, lat_s, lon_s, omega )
+            Kernel_il = geometry.kernel( Time_i, nslice, nside, param_geometry )
+        elif fmodel == "lightcurve":
+            nslice = len(Obs_ij)
+            Kernel_il = np.identity( nslice )
+        else:
+            print("Error: %s is an unrecognized forward model" %fmodel)
+            return None
+
+        # Create list of strings for Y & X parameter names
+        Y_names, X_names = generate_tex_names(ntype, nband, nslice)
+
+        # Specify hdf5 save file and group names
+        hfile = os.path.join(run_dir, "samurai_out.hdf5")
+        grp_init_name = "oe"
+        grp_mcmc_name = "mcmc"
+        grp_data_name = "data"
+        compression = hdf5_compression
+
+        # Get object attributes for saving to HDF5
+        hfile_attrs = self.get_dict()
+        tmp_dict = self.data.get_dict()
+        data_dict_datasets = {}
+        data_dict_attrs = {}
+        data_dict_datasets["Kernel_il"] = Kernel_il # Add Kernel dict
+        # Partition data values into attributes and datasets
+        for key, value in tmp_dict.iteritems():
+            if hasattr(value, "__len__"):
+                data_dict_datasets[key] = value
+            else:
+                data_dict_attrs[key] = value
+
+        # print
+        if verbose: print("Saving:", hfile)
+
+        mcmc_dict_attrs = {
+            "Y_names" : Y_names,
+            "X_names" : X_names,
+        }
+
+        # Create hdf5 file
+        f = h5py.File(hfile, 'w')
+
+        # Add global metadata
+        for key, value in hfile_attrs.iteritems():
+            if value is None:
+                f.attrs[key] = ()
+            else:
+                f.attrs[key] = value
+
+        # Create hdf5 groups (like a directory structure)
+        grp_init = f.create_group(grp_init_name)    # f["initial_optimization/"]
+        grp_data = f.create_group(grp_data_name)    # f["data/"]
+
+        # Save data datasets
+        for key, value in data_dict_datasets.iteritems():
+            if value is None:
+                grp_data.create_dataset(key, data=(), compression=compression)
+            else:
+                grp_data.create_dataset(key, data=value, compression=compression)
+        # Save data metadata
+        for key, value in data_dict_attrs.iteritems():
+            if value is None:
+                grp_data.attrs[key] = ()
+            else:
+                grp_data.attrs[key] = value
+
+
+        for i in range(N):
+
+            # Initialize the fitting parameters from uniform distributions (np.random.rand)
+            #X0_albd_kj = 0.3+np.zeros([ntype, nband])
+            #X0_area_lk = 0.2+np.zeros([nslice, ntype])
+
+            # Account for atmosphere
+            if use_grey:
+                # Add another surface type
+                #ntype += 1
+                # Sample initial area vector
+                X_grey_area_l = np.random.rand(nslice)
+                # Sample initial grey albedo
+                X_grey_albd_0 = np.random.rand()
+                # Construct flat spectrum
+                X_grey_albd_j = X_grey_albd_0 * np.ones(nband)
+            if use_global:
+                # Add another surface type
+                #ntype += 1
+                # Sample initial albedo vector
+                X_global_albd_j = np.random.rand(nband)
+                # Sample initial global coverage
+                X_global_area_0 = np.random.rand()
+                # Construct flat longitude map
+                X_global_area_l = X_global_area_0 * np.ones(nslice)
+
+            if (not use_grey) and (not use_global):
+                # Randomize inital fitting parameters without atmosphere
+                X0_albd_kj = np.random.rand(ntype, nband)
+                X0_area_lk = np.zeros([nslice, ntype]) # intialize array
+                for il in range(nslice):
+                    tmp = np.random.rand(ntype-1)
+                    while np.sum(tmp) > 1.0:
+                        tmp = np.random.rand(ntype-1)
+                    last = 1. - np.sum(tmp)
+                    X0_area_lk[il,:] = np.hstack([tmp,last])
+            elif use_grey and (not use_global):
+                # Randomize inital fitting parameters with grey component to atmosphere
+                X0_albd_kj = np.random.rand(ntype, nband)
+                # Insert grey albedo vector into last column
+                X0_albd_kj[-1,:] = X_grey_albd_j
+                # Initialize map
+                X0_area_lk = np.zeros([nslice, ntype]) # intialize array
+                for il in range(nslice):
+                    tmp = np.random.rand(ntype-1)
+                    while np.sum(tmp) > 1.0:
+                        tmp = np.random.rand(ntype-1)
+                    last = 1. - np.sum(tmp)
+                    X0_area_lk[il,:] = np.hstack([tmp,last])
+            elif use_global and (not use_grey):
+                # Randomize inital fitting parameters with global component to atmosphere
+                X0_albd_kj = np.random.rand(ntype, nband)
+                # Initialize map
+                X0_area_lk = np.zeros([nslice, ntype]) # intialize array
+                for il in range(nslice):
+                    tmp = np.random.rand(ntype-1)
+                    tmp[-1] = X_global_area_0
+                    while np.sum(tmp) > 1.0:
+                        tmp = np.random.rand(ntype-1)
+                        tmp[-1] = X_global_area_0
+                    last = 1. - np.sum(tmp)
+                    X0_area_lk[il,:] = np.hstack([last,tmp])
+                pass
+            else:
+                # Randomize inital fitting parameters with global and grey
+                # component atmosphere
+                X0_albd_kj = np.random.rand(ntype, nband)
+                # Insert grey albedo vector into last column
+                X0_albd_kj[-2,:] = X_grey_albd_j # grey is second to last
+                # Initialize map
+                X0_area_lk = np.zeros([nslice, ntype]) # intialize array
+                for il in range(nslice):
+                    tmp = np.random.rand(ntype-1)
+                    tmp[-1] = X_global_area_0    # global is last
+                    while np.sum(tmp) > 1.0:
+                        tmp = np.random.rand(ntype-1)
+                        tmp[-1] = X_global_area_0
+                    last = 1. - np.sum(tmp)
+                    X0_area_lk[il,:] = np.hstack([last,tmp])
+
+            #Y0_array = reparameterize.transform_X2Y(X0_albd_kj, X0_area_lk)
+            Y0_array = reparameterize.transform_X2Y_atmosphere(X0_albd_kj, X0_area_lk, use_grey=use_grey, use_global=use_global)
+            if ( nregparam > 0 ) :
+                Y0_array = np.append(Y0_array, np.array([10.]*nregparam) )
+            n_dim = len(Y0_array)
+            if verbose:
+                print('Y0_array', Y0_array)
+                print('# of parameters', n_dim)
+                print('N_REGPARAM', nregparam)
+            if (nregparam > 0):
+                #X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(Y0_array[:-1*nregparam], ntype, nband, nslice)
+                X_albd_kj, X_area_lk = reparameterize.transform_Y2X_atmosphere(Y0_array[:-1*nregparam], ntype, nband, nslice, use_grey = use_grey, use_global = use_global)
+            else:
+                #X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(Y0_array, ntype, nband, nslice)
+                X_albd_kj, X_area_lk = reparameterize.transform_Y2X_atmosphere(Y0_array, ntype, nband, nslice, use_grey = use_grey, use_global = use_global)
+            import pdb; pdb.set_trace()
+            ############ run minimization ############
+
+            # minimize
+            if verbose: print("finding best-fit values...")
+            data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice, use_grey, use_global, max_dev)
+            #output = minimize(lnprob, Y0_array, args=data, method="Nelder-Mead")
+            output = minimize(lnprob_atmosphere, Y0_array, args=data, method="L-BFGS-B" )
+            best_fit = output["x"]
+            if verbose: print("best-fit", best_fit)
+
+            # more information about the best-fit parameters
+            data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice, use_grey, use_global, max_dev)
+            lnprob_bestfit = lnprob_atmosphere( output['x'], *data )
 
             # compute BIC
             BIC = 2.0 * lnprob_bestfit + len( output['x'] ) * np.log( len(Obs_ij.flatten()) )
