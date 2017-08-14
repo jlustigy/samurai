@@ -93,14 +93,14 @@ def lnprob_atmosphere(Y_array, *args):
     """
 
     # Unpack args
-    Obs_ij, Obsnoise_ij, Kernel_il, regularization, n_regparam, flip, verbose, n_type, n_slice, use_grey, use_global, max_dev  = args
+    Obs_ij, Obsnoise_ij, Kernel_il, regularization, n_regparam, flip, verbose, n_type, n_slice, use_grey, use_global  = args
     n_band = len(Obs_ij[0])
 
     # Parameter conversion
     if (n_regparam > 0):
-        X_albd_kj, X_area_lk = reparameterize.transform_Y2X(Y_array[:-1*n_regparam], n_type, n_band, n_slice )
+        X_albd_kj, X_area_lk = reparameterize.transform_Y2X_atmosphere(Y_array[:-1*n_regparam], n_type, n_band, n_slice, use_grey=use_grey, use_global=use_global )
     else:
-        X_albd_kj, X_area_lk = reparameterize.transform_Y2X(Y_array, n_type, n_band, n_slice )
+        X_albd_kj, X_area_lk = reparameterize.transform_Y2X_atmosphere(Y_array, n_type, n_band, n_slice, use_grey=use_grey, use_global=use_global )
 
     # Model
     Model_ij = np.dot(Kernel_il, np.dot(X_area_lk, X_albd_kj))
@@ -114,8 +114,17 @@ def lnprob_atmosphere(Y_array, *args):
     Y_albd_kj = Y_array[0:n_type*n_band].reshape([n_type, n_band])
     ln_prior_albd = prior.get_ln_prior_albd( Y_albd_kj )
 
+    # Extract Y_area_lk from Y_array
+    if use_grey and use_global:
+        Y_area_lk = Y_array[(n_type-1)*n_band:(n_type-1)*n_band+n_slice*(n_type-2)].reshape([n_slice, n_type-2])
+    elif use_grey and not use_global:
+        Y_area_lk = Y_array[(n_type-1)*n_band:(n_type-1)*n_band+n_slice*(n_type-1)].reshape([n_slice, n_type-1])
+    elif use_global and not use_grey:
+        Y_area_lk = Y_array[n_type*n_band:n_type*n_band+n_slice*(n_type-2)].reshape([n_slice, n_type-2])
+    else:
+        Y_area_lk = Y_array[n_type*n_band:(n_type)*n_band+n_slice*(n_type-1)].reshape([n_slice, n_type-1])
+
     # flat prior for area fraction
-    Y_area_lk = Y_array[n_type*n_band:n_type*n_band+n_slice*(n_type-1)].reshape([n_slice, n_type-1])
     ln_prior_area = prior.get_ln_prior_area_new( Y_area_lk, X_area_lk[:,:-1] )
 
     # flat ordering prior for labeling degeneracy

@@ -113,8 +113,6 @@ def transform_Y2X_atmosphere(Y_array, n_type, n_band, n_slice, use_grey = False,
 
     elif use_grey and use_global:
 
-        import pdb; pdb.set_trace()
-
         # 'albedo' part
         Y_albd_kj_flat = Y_array[0:(n_type-1)*n_band]
         X_albd_kj_flat = np.exp( Y_albd_kj_flat )/( 1 + np.exp( Y_albd_kj_flat ) )

@@ -521,10 +521,8 @@ class Mapper(object):
                  ntype=3, nsideseed=4, regularization=None, reg_area=False, reg_albd=False,
                  sigmay=3.0, noiselevel=0.01, Nmcmc=10000, Nmcmc_b=0, mcmc_seedamp=0.5,
                  hdf5_compression='lzf', nslice=9, ncpu=None, output=None,
-                 use_grey = False, use_global = False, max_dev = 0.05
+                 use_grey = False, use_global = False
                  ):
-        """
-        """
         self.fmodel=fmodel
         self.imodel=imodel
         self.data=data
@@ -545,7 +543,6 @@ class Mapper(object):
         self.output=output
         self.use_grey = use_grey
         self.use_global = use_global
-        self.max_dev = max_dev
 
         # Params unique to map model
         self.nslice=nslice
@@ -909,9 +906,13 @@ class Mapper(object):
                 if verbose: print(savedir, "already exists.")
         else:
             run_dir = os.path.join("", startstr)
+
         # Create unique run_dir directory
-        os.mkdir(run_dir)
-        if verbose: print("Created directory:", run_dir)
+        try:
+            os.mkdir(run_dir)
+            if verbose: print("Created directory:", run_dir)
+        except OSError:
+            if verbose: print(run_dir, "already exists.")
 
         # Unpack class variables
         fmodel = self.fmodel
@@ -933,7 +934,6 @@ class Mapper(object):
         waveband_widths = self.data.wlw_i
         use_grey = self.use_grey
         use_global = self.use_global
-        max_dev = self.max_dev
 
         # Input data
         Obs_ij = self.data.Obs_ij
@@ -993,6 +993,9 @@ class Mapper(object):
         # Create hdf5 file
         f = h5py.File(hfile, 'w')
 
+        # Create output object
+        self.output = Output(hpath=hfile)
+
         # Add global metadata
         for key, value in hfile_attrs.iteritems():
             if value is None:
@@ -1020,10 +1023,6 @@ class Mapper(object):
 
         for i in range(N):
 
-            # Initialize the fitting parameters from uniform distributions (np.random.rand)
-            #X0_albd_kj = 0.3+np.zeros([ntype, nband])
-            #X0_area_lk = 0.2+np.zeros([nslice, ntype])
-
             # Account for atmosphere
             if use_grey:
                 # Add another surface type
@@ -1044,6 +1043,7 @@ class Mapper(object):
                 # Construct flat longitude map
                 X_global_area_l = X_global_area_0 * np.ones(nslice)
 
+            # Randomize inital fitting parameters (uniform)
             if (not use_grey) and (not use_global):
                 # Randomize inital fitting parameters without atmosphere
                 X0_albd_kj = np.random.rand(ntype, nband)
@@ -1098,34 +1098,43 @@ class Mapper(object):
                     last = 1. - np.sum(tmp)
                     X0_area_lk[il,:] = np.hstack([last,tmp])
 
-            #Y0_array = reparameterize.transform_X2Y(X0_albd_kj, X0_area_lk)
+            # Apply reparameterization:
+            # Physical albedos and areas (X) --> Parameterized state vector
             Y0_array = reparameterize.transform_X2Y_atmosphere(X0_albd_kj, X0_area_lk, use_grey=use_grey, use_global=use_global)
+            # If using regularization
             if ( nregparam > 0 ) :
                 Y0_array = np.append(Y0_array, np.array([10.]*nregparam) )
+
+            # Calculate dimensionality of parameter space
             n_dim = len(Y0_array)
+
+            # Print diagnostics?
             if verbose:
                 print('Y0_array', Y0_array)
                 print('# of parameters', n_dim)
                 print('N_REGPARAM', nregparam)
+
+            # Test reverse (de?)parameterization:
+            # Y --> X
             if (nregparam > 0):
-                #X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(Y0_array[:-1*nregparam], ntype, nband, nslice)
+                # If using any regularization
                 X_albd_kj, X_area_lk = reparameterize.transform_Y2X_atmosphere(Y0_array[:-1*nregparam], ntype, nband, nslice, use_grey = use_grey, use_global = use_global)
             else:
-                #X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(Y0_array, ntype, nband, nslice)
+                # If no regularization
                 X_albd_kj, X_area_lk = reparameterize.transform_Y2X_atmosphere(Y0_array, ntype, nband, nslice, use_grey = use_grey, use_global = use_global)
-            import pdb; pdb.set_trace()
+
             ############ run minimization ############
 
             # minimize
             if verbose: print("finding best-fit values...")
-            data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice, use_grey, use_global, max_dev)
+            data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice, use_grey, use_global)
             #output = minimize(lnprob, Y0_array, args=data, method="Nelder-Mead")
             output = minimize(lnprob_atmosphere, Y0_array, args=data, method="L-BFGS-B" )
             best_fit = output["x"]
             if verbose: print("best-fit", best_fit)
 
             # more information about the best-fit parameters
-            data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice, use_grey, use_global, max_dev)
+            data = (Obs_ij, Obsnoise_ij, Kernel_il, regularization, nregparam, True, False, ntype, nslice, use_grey, use_global)
             lnprob_bestfit = lnprob_atmosphere( output['x'], *data )
 
             # compute BIC
@@ -1134,9 +1143,9 @@ class Mapper(object):
 
             # best-fit values for physical parameters
             if nregparam > 0:
-                X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(output["x"][:-1*nregparam], ntype, nband, nslice)
+                X_albd_kj, X_area_lk =  reparameterize.transform_Y2X_atmosphere(output["x"][:-1*nregparam], ntype, nband, nslice, use_grey = use_grey, use_global = use_global)
             else :
-                X_albd_kj, X_area_lk =  reparameterize.transform_Y2X(output["x"], ntype, nband, nslice)
+                X_albd_kj, X_area_lk =  reparameterize.transform_Y2X_atmosphere(output["x"], ntype, nband, nslice, use_grey = use_grey, use_global = use_global)
 
             X_albd_kj_T = X_albd_kj.T
 
@@ -1187,9 +1196,6 @@ class Mapper(object):
 
         # Close hdf5 file stream
         f.close()
-
-        # Save path to HDF5 file in output object
-        self.output = Output(hpath=hfile)
 
     def run_mcmc(self, savedir="mcmc_output", tag=None, verbose=True,
                  resume=False, initial_guess=None):
