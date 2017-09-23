@@ -1,6 +1,8 @@
 import numpy as np
+import scipy as sp
 
 __all__ = [
+    "get_ln_prior_atmosphere",
     "get_ln_prior_ordering",
     "get_ln_prior_albd",
     "get_ln_prior_area_new",
@@ -11,11 +13,64 @@ __all__ = [
     "regularize_area_tikhonov"
 ]
 
-def get_ln_prior_ordering(x_albd_kj, x_area_lk):
+def get_ln_prior_atmosphere(x_albd_kj, x_area_lk, use_grey, use_global, max_dev = 0.05):
+    """
+    This probably won't work becuase it will penalize any iterative attempt to
+    move the baseline...
+    """
+    ln_prior = 0.0
+
+    if use_grey and (not use_global):
+        #
+        m = np.mean(x_albd_kj[-1,:])
+        dev = np.fabs(x_albd_kj[-1,:] - m)
+        #diff = x_albd_kj[-1,:] - m
+        #probs = sp.stats.norm(np.mean(x_albd_kj[-1,:]), max_dev).pdf(x_albd_kj[-1,:])
+        #
+        if np.any(dev > max_dev):
+            ln_prior = np.inf
+        else:
+            ln_prior = 0.0
+    elif use_global and (not use_grey):
+        #
+        dev = np.fabs(x_area_lk[:,-1] - np.mean(x_area_lk[:,-1]))
+        #
+        if np.any(dev > max_dev):
+            ln_prior = np.inf
+        else:
+            ln_prior = 0.0
+    elif use_grey and use_global:
+        #
+        dev1 = np.fabs(x_albd_kj[-2,:] - np.mean(x_albd_kj[-2,:]))
+        #
+        dev2 = np.fabs(x_area_lk[:,-1] - np.mean(x_area_lk[:,-1]))
+        #
+        if np.any(dev1 > max_dev) or np.any(dev2 > max_dev):
+            ln_prior = np.inf
+        else:
+            ln_prior = 0.0
+    else:
+        ln_prior = 0.0
+
+    return ln_prior
+
+
+def get_ln_prior_ordering(x_albd_kj, x_area_lk, use_grey = False, use_global = False):
+
+    # Set columns from the right to ignore
+    if use_grey and use_global:
+        n = -2
+    elif use_grey or use_global:
+        n = -1
+    else:
+        n = None
+
     # Calculate "detectability" metric
-    dm = np.mean(x_albd_kj, axis=1) * np.mean(x_area_lk, axis=0)
+    dm = np.mean(x_albd_kj[:n,:], axis=1) * np.mean(x_area_lk[:,:n], axis=0)
+
     # Sort by detectability
     dms = np.sort(dm)
+
     # Check sorted against original
     if False in dm == dms:
         # Had to resort, reject sample
@@ -23,6 +78,7 @@ def get_ln_prior_ordering(x_albd_kj, x_area_lk):
     else:
         # Stays in order, accept sample
         ln_prior = 0.0
+
     return ln_prior
 
 #---------------------------------------------------
