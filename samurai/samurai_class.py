@@ -14,6 +14,7 @@ import healpy as hp
 import emcee
 import emcee3
 import h5py
+import wpca
 
 # Import packages files
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
@@ -636,12 +637,118 @@ class Mapper(object):
         # Return new class instance
         return cls(output=Output(hpath=path), data=Data(**ddic), **sdic)
 
-    def run_oe(self, savedir="mcmc_output", tag=None, verbose=False, N=1):
+    def run_pca(self, whichPCA = "PCA", n_comp_max = None, var_eps = 1e-2,
+                savedir="mcmc_output", tag=None, verbose=False):
         """
-        Run Mapper object simulation using Optimal Estimation (OE)
+        Run PCA on multi-wavelength lightcurves contained in `self.Data`
 
         Parameters
         ----------
+        whichPCA : str
+            Which PCA algorithm to use ("PCA", "WPCA", or "EMPCA")
+        n_comp_max : int
+            Maximum number of principal components to use
+        var_eps :
+            Threshold explained variance for which to accept PCs
+        savedir : str
+            Name of directory to save output in
+        tag : str
+            Name of specific simulation. Default is the date/time
+        verbose : bool
+            Use print statements
+        """
+
+        # Create save directory structure
+        """
+        # Get start time
+        now = datetime.datetime.now()
+        if verbose: print(now.strftime("%Y-%m-%d %H:%M:%S"))
+
+        # Create directory for this run
+        if tag is None:
+            startstr = now.strftime("%Y-%m-%d--%H-%M")
+        else:
+            startstr = tag
+
+        # Create savedir directory, if necessary
+        if savedir is not None:
+            run_dir = os.path.join(savedir, startstr)
+            try:
+                os.mkdir(savedir)
+                if verbose: print("Created directory:", savedir)
+            except OSError:
+                if verbose: print(savedir, "already exists.")
+        else:
+            run_dir = os.path.join("", startstr)
+        # Create unique run_dir directory
+        os.mkdir(run_dir)
+        if verbose: print("Created directory:", run_dir)
+        """
+
+        # Input data
+        Obs_ij = self.data.Obs_ij
+        nband = len(Obs_ij[0])
+        if self.data.Obsnoise_ij is None:
+            weights = None
+        else:
+            weights = 1. / self.data.Obsnoise_ij
+
+        # Set the number of PCs to use
+        if n_comp_max is None:
+            n_components = nband
+        else:
+            n_components = n_comp_max
+
+        # Select PCA algorithm
+        if whichPCA == "PCA":
+            PCA = wpca.PCA
+        elif whichPCA == "WPCA":
+            PCA = wpca.WPCA
+        elif whichPCA == "EMPCA":
+            PCA = wpca.EMPCA
+        else:
+            PCA = wpca.PCA
+
+        # Compute the standard/weighted PCA
+        if weights is None:
+            kwds = {}
+        else:
+            kwds = {'weights': weights}
+
+        # Initialize PCA with number of components
+        pca = PCA(n_components=n_components)
+
+        # Fit for principle components
+        pca.fit(Obs_ij, **kwds)
+
+        # Get mean, components, variance ratio, and weights
+        mean = pca.mean_
+        components = pca.components_
+        variance = pca.explained_variance_ratio_
+        transform = pca.transform(Obs_ij)
+
+        # Determine number of PCs needed to explain variance to threshold precision
+        vmask = variance >= var_eps
+        NPCs = np.sum(vmask)
+        if verbose: print("%i PCs needed to explain data variance to %.1e" %(NPCs, var_eps))
+
+        self.pca = pca
+        self.pca.NPCs = (var_eps, NPCs)
+
+    def run_oe(self, savedir="mcmc_output", tag=None, verbose=False, N=1):
+        """
+        Run `Mapper` simulation using Optimal Estimation (OE)
+
+        Parameters
+        ----------
+        savedir : str
+            Name of directory to save output in
+        tag : str
+            Name of specific simulation. Default is the date/time
+        verbose : bool
+            Use print statements
+        N : int
+            Number of randomly initialized minimizations
         """
 
         # Get start time
