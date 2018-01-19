@@ -9,6 +9,28 @@ from scipy.optimize import minimize
 from types import ModuleType, FunctionType, StringType
 from pdb import set_trace as stop
 
+# Import plotting packages
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import platform
+if platform.system() == 'Darwin':
+    # On a Mac: usetex ok
+    mpl.rc('font',**{'family':'serif','serif':['Computer Modern']})
+    mpl.rcParams['font.size'] = 25.0
+    mpl.rc('text', usetex=True)
+elif platform.node().startswith("D"):
+    # On hyak: usetex not ok, must change backend to 'agg'
+    mpl.rc('font',**{'family':'serif','serif':['Computer Modern']})
+    mpl.rcParams['font.size'] = 25.0
+    mpl.rc('text', usetex=False)
+    plt.switch_backend('agg')
+else:
+    # On astro machine or other linux: usetex not ok
+    plt.switch_backend('agg')
+    mpl.rc('font', family='Times New Roman')
+    mpl.rcParams['font.size'] = 25.0
+    mpl.rc('text', usetex=False)
+
 # Import dependent modules
 import healpy as hp
 import emcee
@@ -1691,6 +1713,7 @@ def get_best_fitting_oe_soln(hpath):
     ntype = f.attrs['ntype']
     nslice = f.attrs['nslice']
     nwl = len(f['data/wlc_i'].value)
+    Obs_ij = f["data/Obs_ij"]
 
     # Select lowest ln(likelihood)
     lnps = np.array([f['oe/%i/' %i].attrs['best_lnprob'] for i in range(Noe)])
@@ -1705,7 +1728,7 @@ def get_best_fitting_oe_soln(hpath):
 
     # Calculate BIC and AIC
     ndim = (ntype - 1)*nslice + ntype*nwl
-    bic = 2*lnp + ndim * np.log(Obs.size)
+    bic = 2*lnp + ndim * np.log(Obs_ij.size)
     aic = 2.*ndim + 2.*lnp
 
     # Return dictionary with important values
@@ -1733,7 +1756,7 @@ def plot_best_oe_map(hpath, index = None):
     dwl = f['data/wlw_i'].value
 
     # Set plot colors
-    c = ["C%i" %(i%10) for i in range(ntype)]
+    c = ["C%i" %(i%10) for i in range(n_type)]
 
     xalb = wl
 
@@ -1786,7 +1809,7 @@ def plot_best_oe_map(hpath, index = None):
 
     return fig, ax
 
-def plot_oe_model_vs_data(hpath):
+def plot_oe_model_vs_data(hpath, index = None, ytrue = None):
     """
     """
 
@@ -1796,17 +1819,26 @@ def plot_oe_model_vs_data(hpath):
 
     # Parse file
     Obs_ij = f["data/Obs_ij"]
+    Obsnoise_ij = f["data/Obsnoise_ij"]
     n_times = len(Obs_ij)
     n_type = f.attrs["ntype"]
     n_band = len(Obs_ij[0])
     n_regparam = f.attrs["nregparam"]
     Kernel_il = f["data/Kernel_il"].value
-    time = np.arange(n_times)
-    wl = f['data/wlc_i'].value
-    dwl = f['data/wlw_i'].value
-    X_albd_kj_T = f["oe/%i/X_albd_kj_T" %ret["index"]].value
+    time = f["data/Time_i"]
+    wlc = f['data/wlc_i'].value
+    wlw = f['data/wlw_i'].value
+
+    if index is None:
+        lnps = np.array([f['oe/%i/' %i].attrs['best_lnprob'] for i in range(Noe)])
+        ibest = np.argmin(lnps)
+        i = ibest
+    else:
+        i = index
+
+    X_albd_kj_T = f["oe/%i/X_albd_kj_T" %i].value
     X_albd_kj = X_albd_kj_T.T
-    X_area_lk = f["oe/%i/X_area_lk" %ret["index"]].value
+    X_area_lk = f["oe/%i/X_area_lk" %i].value
 
     # Calculate Model
     Model_ij = np.dot(Kernel_il, np.dot(X_area_lk, X_albd_kj))
@@ -1820,13 +1852,14 @@ def plot_oe_model_vs_data(hpath):
     for i in range(len(wlc)):
 
         # Plot data
-        ax.errorbar(x, y[:,i], yerr=yerr[:,i], fmt=".", capsize=0, color="C%i" %(i%10), alpha = 0.25)
+        ax.errorbar(time, Obs_ij[:,i], yerr=Obsnoise_ij[:,i], fmt=".", capsize=0, color="C%i" %(i%10), alpha = 0.25)
 
         # Plot truth
-        ax.plot(x, ytrue[:,i], color="C%i" %(i%10), ls = "dotted", alpha = 0.5)
+        if ytrue is not None:
+            ax.plot(time, ytrue[:,i], color="C%i" %(i%10), ls = "dotted", alpha = 0.5)
 
         # Plot model
-        ax.plot(x, Model_ij[:,i], color="C%i" %(i%10), ls = "-", label = r"$\lambda = %.2f \pm %.3f$ $\mu$m" %(wlc[i], wlw[i]/2.))
+        ax.plot(time, Model_ij[:,i], color="C%i" %(i%10), ls = "-", label = r"$\lambda = %.2f \pm %.3f$ $\mu$m" %(wlc[i], wlw[i]/2.))
 
     # Make legend
     leg=ax.legend(loc=0, fontsize=16)
