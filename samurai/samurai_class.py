@@ -26,7 +26,8 @@ from .map_utils import generate_tex_names, save2hdf5, calculate_walkers, set_nre
 from .mcmc_physical import plot_area_alb, plot_model_data, plot_posteriors
 from .mcmc_analysis import plot_trace
 
-__all__ = ["Mapper", "Data", "Output"]
+__all__ = ["Mapper", "Data", "Output", "get_best_fitting_oe_soln",
+           "plot_best_oe_map", "plot_oe_model_vs_data"]
 
 # The location to *this* file
 RELPATH = os.path.dirname(__file__)
@@ -331,34 +332,34 @@ class Output(object):
 
 class Data(object):
     """
+    ``samurai`` Data object
+
+    Parameters
+    ----------
+    Time_i : numpy.ndarray
+        Observational time grid [hours]
+    Obs_ij : numpy.ndarray
+        Observed multi-wavelength, lightcurve data
+    Obsnoise_ij : numpy.ndarray
+        Observational errors
+    wlc_i : numpy.ndarray
+        Wavelength grid band centers [nm]
+    wlw_i : numpy.ndarray
+        Wavelength grid bandwidths [nm]
+    lat_s : float
+        Sub-stellar latitude [deg]
+    lon_s : float
+        Sub-stellar longitude [deg]
+    lat_o : float
+        sub-observer latitude [deg]
+    lon_o : float
+        Sub-observer longitude [deg]
+    period : float
+        Planet rotational period [hours]
     """
     def __init__(self, Time_i=None, Obs_ij=None, Obsnoise_ij=None, wlc_i=None, wlw_i=None,
                  lat_s=None, lon_s=None, lat_o=None, lon_o=None, period=None):
         """
-        ``samurai`` Data object
-
-        Parameters
-        ----------
-        Time_i : numpy.ndarray
-            Observational time grid [hours]
-        Obs_ij : numpy.ndarray
-            Observed multi-wavelength, lightcurve data
-        Obsnoise_ij : numpy.ndarray
-            Observational errors
-        wlc_i : numpy.ndarray
-            Wavelength grid band centers [nm]
-        wlw_i : numpy.ndarray
-            Wavelength grid bandwidths [nm]
-        lat_s : float
-            Sub-stellar latitude [deg]
-        lon_s : float
-            Sub-stellar longitude [deg]
-        lat_o : float
-            sub-observer latitude [deg]
-        lon_o : float
-            Sub-observer longitude [deg]
-        period : float
-            Planet rotational period [hours]
         """
         self.Time_i=Time_i
         self.Obs_ij=Obs_ij
@@ -376,6 +377,9 @@ class Data(object):
             self._omega= ( 2. * np.pi / self.period )
 
     def get_dict(self):
+        """
+        Returns dictionary of object attributes
+        """
         d = {}
         for key, value in self.__dict__.iteritems():
             if key.startswith("_"):
@@ -690,6 +694,7 @@ class Mapper(object):
         nband = len(Obs_ij[0])
         if self.data.Obsnoise_ij is None:
             weights = None
+            whichPCA = "PCA"
         else:
             weights = 1. / self.data.Obsnoise_ij
 
@@ -735,7 +740,8 @@ class Mapper(object):
         self.pca = pca
         self.pca.NPCs = (var_eps, NPCs)
 
-    def run_oe(self, savedir="mcmc_output", tag=None, verbose=False, N=1):
+    def run_oe(self, savedir="mcmc_output", tag=None, verbose=False, N=1,
+                hname = "samurai_out.hdf5"):
         """
         Run `Mapper` simulation using Optimal Estimation (OE)
 
@@ -772,8 +778,11 @@ class Mapper(object):
         else:
             run_dir = os.path.join("", startstr)
         # Create unique run_dir directory
-        os.mkdir(run_dir)
-        if verbose: print("Created directory:", run_dir)
+        try:
+            os.mkdir(run_dir)
+            if verbose: print("Created directory:", run_dir)
+        except OSError:
+            if verbose: print(run_dir, "already exists.")
 
         # Unpack class variables
         fmodel = self.fmodel
@@ -824,7 +833,7 @@ class Mapper(object):
         Y_names, X_names = generate_tex_names(ntype, nband, nslice)
 
         # Specify hdf5 save file and group names
-        hfile = os.path.join(run_dir, "samurai_out.hdf5")
+        hfile = os.path.join(run_dir, hname)
         grp_init_name = "oe"
         grp_mcmc_name = "mcmc"
         grp_data_name = "data"
@@ -871,12 +880,6 @@ class Mapper(object):
                 grp_data.create_dataset(key, data=(), compression=compression)
             else:
                 grp_data.create_dataset(key, data=value, compression=compression)
-        # Save data metadata
-        for key, value in data_dict_attrs.iteritems():
-            if value is None:
-                grp_data.attrs[key] = ()
-            else:
-                grp_data.attrs[key] = value
 
 
         for i in range(N):
@@ -1673,3 +1676,160 @@ class Mapper(object):
             self.output = Output(hpath=hfile)
 
         # End if
+
+################################################################################
+# ASSORTED FUNCTIONS
+################################################################################
+
+def get_best_fitting_oe_soln(hpath):
+    """
+    """
+
+    # Open HDF5 output file
+    f = h5py.File(hpath, "r")
+    Noe = len(f['oe'].keys())
+    ntype = f.attrs['ntype']
+    nslice = f.attrs['nslice']
+    nwl = len(f['data/wlc_i'].value)
+
+    # Select lowest ln(likelihood)
+    lnps = np.array([f['oe/%i/' %i].attrs['best_lnprob'] for i in range(Noe)])
+    ibest = np.argmin(lnps)
+    i = ibest
+
+    # Get best BIC
+    BIC = f['oe/%i/' %i].attrs['best_BIC']
+
+    # Get best lnP
+    lnp = f['oe/%i/' %i].attrs['best_lnprob']
+
+    # Calculate BIC and AIC
+    ndim = (ntype - 1)*nslice + ntype*nwl
+    bic = 2*lnp + ndim * np.log(Obs.size)
+    aic = 2.*ndim + 2.*lnp
+
+    # Return dictionary with important values
+    return {"index" : i,
+            "BIC" : bic,
+            "AIC" : aic,
+            "lnP" : lnp}
+
+def plot_best_oe_map(hpath, index = None):
+    """
+    """
+
+    # Open HDF5 output file
+    f = h5py.File(hpath, "r")
+    Noe = len(f['oe'].keys())
+
+    # Parse file
+    Obs_ij = f["data/Obs_ij"]
+    n_times = len(Obs_ij)
+    n_type = f.attrs["ntype"]
+    n_band = len(Obs_ij[0])
+    n_regparam = f.attrs["nregparam"]
+    time = np.arange(n_times)
+    wl = f['data/wlc_i'].value
+    dwl = f['data/wlw_i'].value
+
+    # Set plot colors
+    c = ["C%i" %(i%10) for i in range(ntype)]
+
+    xalb = wl
+
+    # Create figure
+    fig, ax  = plt.subplots(1, 2,figsize=(16,6))
+    ax[1].set_xlabel("Wavelength [$\mu$m]")
+    ax[1].set_ylabel("Albedo")
+
+    # Set n_slice based on forward model
+    if f.attrs["fmodel"] == "map":
+        n_slice = f.attrs["nslice"]
+        ax[0].set_xlabel("Slice Longitude [deg]")
+        ax[0].set_ylabel("Area Fraction")
+        xarea = np.array([-180. + (360. / n_slice) * (i + 0.5) for i in range(n_slice)])
+        ax[0].set_xlim([-185, 185])
+        ax[0].set_xticks([-180, -90, 0, 90, 180])
+    elif f.attrs["fmodel"] == "lightcurve":
+        n_slice = len(Obs_ij)
+        ax[0].set_xlabel("Time [hrs]")
+        ax[0].set_ylabel("Contribution Factor")
+        xarea = time
+    else:
+        print("Error: %s is an unrecognized forward model" %f.attrs["fmodel"])
+
+    if index is None:
+        lnps = np.array([f['oe/%i/' %i].attrs['best_lnprob'] for i in range(Noe)])
+        ibest = np.argmin(lnps)
+        i = ibest
+    else:
+        i = index
+
+    # Get best fitting area and albedo matrices
+    X_area_lk = f['oe/%i/X_area_lk' %i].value
+    X_albd_kj_T = f['oe/%i/X_albd_kj_T' %i].value
+
+    # Loop over surfaces, plotting
+    for j in range(n_type):
+        ax[0].plot(xarea, X_area_lk[:,j], "o-", label="Surface %i" %(j+1), color=c[j], alpha=1.0)
+        ax[1].plot(xalb, X_albd_kj_T[:,j], "o-", color=c[j], alpha=1.0, label="Surface %i" %(j+1))
+
+    # Make legend
+    leg=ax[1].legend(loc=0, fontsize=20)
+    leg.get_frame().set_alpha(0.0)
+
+    # Tweak tick labels
+    plt.setp(ax[0].get_xticklabels(), fontsize=18, rotation=0)
+    plt.setp(ax[0].get_yticklabels(), fontsize=18, rotation=0)
+    plt.setp(ax[1].get_xticklabels(), fontsize=18, rotation=0)
+    plt.setp(ax[1].get_yticklabels(), fontsize=18, rotation=0)
+
+    return fig, ax
+
+def plot_oe_model_vs_data(hpath):
+    """
+    """
+
+    # Open HDF5 output file
+    f = h5py.File(hpath, "r")
+    Noe = len(f['oe'].keys())
+
+    # Parse file
+    Obs_ij = f["data/Obs_ij"]
+    n_times = len(Obs_ij)
+    n_type = f.attrs["ntype"]
+    n_band = len(Obs_ij[0])
+    n_regparam = f.attrs["nregparam"]
+    Kernel_il = f["data/Kernel_il"].value
+    time = np.arange(n_times)
+    wl = f['data/wlc_i'].value
+    dwl = f['data/wlw_i'].value
+    X_albd_kj_T = f["oe/%i/X_albd_kj_T" %ret["index"]].value
+    X_albd_kj = X_albd_kj_T.T
+    X_area_lk = f["oe/%i/X_area_lk" %ret["index"]].value
+
+    # Calculate Model
+    Model_ij = np.dot(Kernel_il, np.dot(X_area_lk, X_albd_kj))
+
+    # Create figure
+    fig, ax = plt.subplots(figsize = (14,6))
+    ax.set_xlabel(r"Time [hours]")
+    ax.set_ylabel(r"Albedo")
+
+    # Loop over wavelengths, plotting lightcurves
+    for i in range(len(wlc)):
+
+        # Plot data
+        ax.errorbar(x, y[:,i], yerr=yerr[:,i], fmt=".", capsize=0, color="C%i" %(i%10), alpha = 0.25)
+
+        # Plot truth
+        ax.plot(x, ytrue[:,i], color="C%i" %(i%10), ls = "dotted", alpha = 0.5)
+
+        # Plot model
+        ax.plot(x, Model_ij[:,i], color="C%i" %(i%10), ls = "-", label = r"$\lambda = %.2f \pm %.3f$ $\mu$m" %(wlc[i], wlw[i]/2.))
+
+    # Make legend
+    leg=ax.legend(loc=0, fontsize=16)
+    leg.get_frame().set_alpha(0.0)
+
+    return fig, ax
