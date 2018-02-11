@@ -177,7 +177,7 @@ def plot_area_alb(samples, n_all, directory="", savetxt=True, intvls=[0.16, 0.5,
 
     if lam is not None:
         xalb = lam
-        ax1.set_xlabel("Wavelength [nm]")
+        ax1.set_xlabel(r"Wavelength [$\mu$m]")
     elif epoxi:
         epoxi_bands = np.loadtxt("data/EPOXI_band")
         wl = epoxi_bands[:,1]
@@ -193,19 +193,26 @@ def plot_area_alb(samples, n_all, directory="", savetxt=True, intvls=[0.16, 0.5,
         wl = epoxi_bands[:,1]
         c = [convolve_with_eye(wl, med_alb[i,:]) for i in range(n_all["ntype"])]
     else:
-        c = ["purple", "orange", "green", "lightblue"]
+        # Set plot colors
+        c = ["C%i" %(i%10) for i in range(n_all["ntype"])]
 
     for i in range(n_all["ntype"]):
         ax0.plot(xarea, area_med[:,i], "o-", label="Surface %i" %(i+1), color=c[i])
         ax0.fill_between(xarea, area_med[:,i] - area_m[:,i], area_med[:,i] + area_p[:,i], alpha=0.3, color=c[i])
-        ax1.plot(xalb, alb_med[i,:], "o-", color=c[i])
+        ax1.plot(xalb, alb_med[i,:], "o-", color=c[i], label="Surface %i" %(i+1))
         ax1.fill_between(xalb, alb_med[i,:] - alb_m[i,:], alb_med[i,:] + alb_p[i,:], alpha=0.3 ,color=c[i])
 
     ax0.set_ylim([-0.02, 1.02])
     ax1.set_ylim([-0.02, 1.02])
 
-    leg=ax0.legend(loc=0, fontsize=14)
+    leg=ax1.legend(loc=0, fontsize=20)
     leg.get_frame().set_alpha(0.0)
+
+    # Tweak tick labels
+    plt.setp(ax0.get_xticklabels(), fontsize=18, rotation=0)
+    plt.setp(ax0.get_yticklabels(), fontsize=18, rotation=0)
+    plt.setp(ax1.get_xticklabels(), fontsize=18, rotation=0)
+    plt.setp(ax1.get_yticklabels(), fontsize=18, rotation=0)
 
     # Save the plot
     fig.savefig(os.path.join(directory, "area-alb.pdf"), bbox_inches="tight")

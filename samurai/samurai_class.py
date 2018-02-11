@@ -54,6 +54,13 @@ __all__ = ["Mapper", "Data", "Output", "get_best_fitting_oe_soln",
 # The location to *this* file
 RELPATH = os.path.dirname(__file__)
 
+# Set the default emcee moves
+default_emcee_moves = [
+                        (emcee3.moves.DEMove(0.01), 0.5),
+                        (emcee3.moves.DESnookerMove(), 0.1),
+                        (emcee3.moves.StretchMove(), 0.1),
+                       ]
+
 ################################################################################
 # Output
 ################################################################################
@@ -1330,7 +1337,8 @@ class Mapper(object):
         f.close()
 
     def run_mcmc(self, savedir="mcmc_output", tag=None, verbose=True,
-                 resume=False, initial_guess=None):
+                 resume=False, initial_guess=None, hname = "samurai_out.hdf5",
+                 moves = default_emcee_moves):
         """
         Run Mapper object simulation
 
@@ -1370,10 +1378,16 @@ class Mapper(object):
                     if verbose: print(savedir, "already exists.")
             else:
                 run_dir = os.path.join("", startstr)
+
             # Create unique run_dir directory
-            os.mkdir(run_dir)
-            if verbose: print("Created directory:", run_dir)
+            try:
+                os.mkdir(run_dir)
+                if verbose: print("Created directory:", run_dir)
+            except OSError:
+                if verbose: print(run_dir, "already exists.")
+
         else:
+
             # Set run_dir by previous run
             run_dir = os.path.split(self.output.hpath)[0]
 
@@ -1558,11 +1572,15 @@ class Mapper(object):
 
             # Initialize sampler with Moves: Linear combo of samplers -- essential
             # for multi-modal posteriors
-            sampler = emcee3.Sampler([
-                (emcee3.moves.DEMove(0.01), 0.5),
-                (emcee3.moves.DESnookerMove(), 0.1),
-                (emcee3.moves.StretchMove(), 0.1),
-            ])
+            """# Set as kwarg for this function
+            moves = [
+                    (emcee3.moves.DEMove(0.01), 0.5),
+                    (emcee3.moves.DESnookerMove(), 0.1),
+                    (emcee3.moves.StretchMove(), 0.1),
+                    ]
+            """
+
+            sampler = emcee3.Sampler(moves)
 
             # Do Burn-in run? No
             if verbose: print("Running emcee3...")
@@ -1594,7 +1612,7 @@ class Mapper(object):
         ############ Save HDF5 File ############
 
         # Specify hdf5 save file and group names
-        hfile = os.path.join(run_dir, "samurai_out.hdf5")
+        hfile = os.path.join(run_dir, hname)
         grp_init_name = "initial_optimization"
         grp_mcmc_name = "mcmc"
         grp_data_name = "data"
